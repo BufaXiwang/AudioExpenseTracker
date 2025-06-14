@@ -29,9 +29,22 @@
 		3857A1B12DFC692E00ED8D11 /* AudioExpenseTrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AudioExpenseTrackerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		3857A3192DFDB77300ED8D11 /* Exceptions for "AudioExpenseTracker" folder in "AudioExpenseTracker" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 3857A1992DFC692B00ED8D11 /* AudioExpenseTracker */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		3857A19C2DFC692B00ED8D11 /* AudioExpenseTracker */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				3857A3192DFDB77300ED8D11 /* Exceptions for "AudioExpenseTracker" folder in "AudioExpenseTracker" target */,
+			);
 			path = AudioExpenseTracker;
 			sourceTree = "<group>";
 		};
@@ -398,6 +411,8 @@
 				DEVELOPMENT_TEAM = YP4BZ63BZ2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AudioExpenseTracker/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "语音记账";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "需要访问麦克风来录制语音，以便进行费用记录";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "需要使用语音识别功能将您的语音转换为文字，以便自动识别费用信息";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -428,6 +443,8 @@
 				DEVELOPMENT_TEAM = YP4BZ63BZ2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AudioExpenseTracker/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "语音记账";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "需要访问麦克风来录制语音，以便进行费用记录";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "需要使用语音识别功能将您的语音转换为文字，以便自动识别费用信息";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

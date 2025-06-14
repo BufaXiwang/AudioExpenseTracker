@@ -11,9 +11,13 @@ import SwiftData
 @MainActor
 class DataStorageService: ObservableObject {
     private var modelContext: ModelContext?
-    private let modelContainer: ModelContainer
+    private let modelContainer: ModelContainer?
+    @Published var initializationError: String?
     
     init() {
+        var container: ModelContainer?
+        var error: String?
+        
         do {
             // 配置数据模型
             let schema = Schema([
@@ -26,14 +30,68 @@ class DataStorageService: ObservableObject {
                 cloudKitDatabase: .none // 暂时不使用 CloudKit
             )
             
-            modelContainer = try ModelContainer(
+            container = try ModelContainer(
                 for: schema,
                 configurations: [modelConfiguration]
             )
             
-            modelContext = ModelContext(modelContainer)
+            print("✅ 数据存储初始化成功")
+        } catch let initialError {
+            print("❌ 数据存储初始化失败: \(initialError.localizedDescription)")
+            var errorMessage = "数据存储初始化失败: \(initialError.localizedDescription)"
+            
+            // 尝试创建内存数据库作为备用方案
+            do {
+                let schema = Schema([ExpenseRecord.self])
+                let inMemoryConfig = ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+                
+                container = try ModelContainer(
+                    for: schema,
+                    configurations: [inMemoryConfig]
+                )
+                
+                errorMessage = "数据库初始化失败，已切换到内存模式。数据不会持久化保存。"
+                print("⚠️ 已切换到内存数据库模式")
+            } catch let fallbackError {
+                print("❌ 内存数据库创建也失败: \(fallbackError.localizedDescription)")
+                errorMessage = "数据存储完全不可用: \(fallbackError.localizedDescription)"
+            }
+            
+            error = errorMessage
+        }
+        
+        self.modelContainer = container
+        self.initializationError = error
+        
+        if let container = container {
+            self.modelContext = ModelContext(container)
+        }
+    }
+    
+    // MARK: - 健康检查
+    
+    var isHealthy: Bool {
+        return modelContext != nil && modelContainer != nil
+    }
+    
+    func performHealthCheck() -> DataHealthStatus {
+        guard let context = modelContext, let _ = modelContainer else {
+            return .critical("数据存储服务不可用")
+        }
+        
+        do {
+            // 尝试执行一个简单的查询来测试数据库连接
+            let descriptor = FetchDescriptor<ExpenseRecord>(
+                sortBy: [SortDescriptor(\.date, order: .reverse)]
+            )
+            _ = try context.fetch(descriptor)
+            return .healthy
         } catch {
-            fatalError("无法初始化数据存储：\(error)")
+            return .degraded("数据库查询失败: \(error.localizedDescription)")
         }
     }
     
@@ -206,16 +264,16 @@ class DataStorageService: ObservableObject {
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         
         for expense in expenses {
-            let row = [
+            let row: [String] = [
                 dateFormatter.string(from: expense.date),
                 String(describing: expense.amount),
                 expense.category.rawValue,
                 expense.title.replacingOccurrences(of: ",", with: "，"),
                 expense.descriptionText.replacingOccurrences(of: ",", with: "，"),
                 String(expense.confidence)
-            ].joined(separator: ",")
+            ]
             
-            csvContent += row + "\n"
+            csvContent += row.joined(separator: ",") + "\n"
         }
         
         return csvContent
@@ -300,7 +358,7 @@ class DataStorageService: ObservableObject {
     }
     
     func getModelContainer() -> ModelContainer {
-        return modelContainer
+        return modelContainer!
     }
 }
 
@@ -317,6 +375,33 @@ struct DataValidationResult {
     
     var hasWarnings: Bool {
         return lowConfidenceCount > 0
+    }
+}
+
+// MARK: - 健康状态
+enum DataHealthStatus: Equatable {
+    case healthy
+    case degraded(String)
+    case critical(String)
+    
+    var isOperational: Bool {
+        switch self {
+        case .healthy, .degraded:
+            return true
+        case .critical:
+            return false
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .healthy:
+            return "数据存储正常"
+        case .degraded(let message):
+            return "数据存储异常: \(message)"
+        case .critical(let message):
+            return "数据存储不可用: \(message)"
+        }
     }
 }
 

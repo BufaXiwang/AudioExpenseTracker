@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftUI
 
 enum ExpenseCategory: String, CaseIterable, Codable {
     case food = "餐饮"
@@ -21,7 +22,11 @@ enum ExpenseCategory: String, CaseIterable, Codable {
     case travel = "旅行"
     case other = "其他"
     
-    var icon: String {
+    var displayName: String {
+        return self.rawValue
+    }
+    
+    var iconName: String {
         switch self {
         case .food:
             return "fork.knife"
@@ -50,32 +55,37 @@ enum ExpenseCategory: String, CaseIterable, Codable {
         }
     }
     
-    var color: String {
+    var color: Color {
         switch self {
         case .food:
-            return "orange"
+            return .orange
         case .transport:
-            return "blue"
+            return .blue
         case .shopping:
-            return "pink"
+            return .pink
         case .entertainment:
-            return "purple"
+            return .purple
         case .healthcare:
-            return "red"
+            return .red
         case .housing:
-            return "brown"
+            return .brown
         case .education:
-            return "green"
+            return .green
         case .utilities:
-            return "yellow"
+            return .yellow
         case .clothing:
-            return "indigo"
+            return .indigo
         case .gift:
-            return "mint"
+            return .mint
         case .travel:
-            return "cyan"
+            return .cyan
         case .other:
-            return "gray"
+            return .gray
         }
+    }
+    
+    // 保留原有的icon属性以保持兼容性
+    var icon: String {
+        return iconName
     }
 } 

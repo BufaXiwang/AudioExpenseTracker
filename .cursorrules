@@ -108,3 +108,11 @@
 - 解释设计决策和最佳实践
 - 指出潜在的问题和改进建议
 - 考虑 iOS 18.4+ 的新特性和 API 
+
+
+### 测试脚本
+
+xcodebuild -project AudioExpenseTracker.xcodeproj \
+  -scheme AudioExpenseTracker \
+  -destination "platform=iOS,name=杨志刚的iPhone" \
+  build

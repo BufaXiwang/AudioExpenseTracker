@@ -12,39 +12,50 @@ class AIAnalysisService: ObservableObject {
     @Published var isAnalyzing = false
     @Published var lastError: Error?
     
-    private let apiKey: String
     private let baseURL: String
-    private let session = URLSession.shared
+    private let apiKey: String
+    private let session: URLSession
+    private let maxRetryAttempts = 3
+    private let requestTimeout: TimeInterval = 30.0
     
     init() {
-        self.apiKey = ConfigManager.shared.deepseekAPIKey
         self.baseURL = ConfigManager.shared.apiBaseURL
+        self.apiKey = ConfigManager.shared.deepseekAPIKey
         
-        // 启动时验证配置
+        // 配置 URLSession
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = requestTimeout
+        config.timeoutIntervalForResource = requestTimeout * 2
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil // 禁用缓存以确保隐私
+        
+        self.session = URLSession(configuration: config)
+        
+        // 验证配置
         if !ConfigManager.shared.validateAPIKey() {
-            print("⚠️ API Key 配置有问题，AI 分析功能可能无法正常工作")
+            print("⚠️ AI 服务初始化时 API Key 验证失败")
         }
         
         // 打印配置信息（用于调试）
         ConfigManager.shared.printConfigInfo()
     }
     
-    // MARK: - 主要分析方法
+    deinit {
+        session.invalidateAndCancel()
+    }
+    
+    // MARK: - 公共接口
+    
     func analyzeExpense(_ request: AIAnalysisRequest) async throws -> AIAnalysisResult {
-        isAnalyzing = true
-        defer { isAnalyzing = false }
-        
         let startTime = Date()
         
         do {
-            let prompt = buildAnalysisPrompt(from: request)
-            let response = try await sendChatRequest(prompt: prompt)
-            let result = parseAnalysisResponse(response, originalText: request.voiceText)
-            
+            let result = try await performAnalysisWithRetry(request)
             let processingTime = Date().timeIntervalSince(startTime)
             
+            // 添加处理时间到结果中
             return AIAnalysisResult(
-                originalText: request.voiceText,
+                originalText: result.originalText,
                 extractedAmount: result.extractedAmount,
                 suggestedCategory: result.suggestedCategory,
                 suggestedTitle: result.suggestedTitle,
@@ -53,20 +64,144 @@ class AIAnalysisService: ObservableObject {
                 suggestedTags: result.suggestedTags,
                 alternativeInterpretations: result.alternativeInterpretations,
                 processingTime: processingTime,
-                timestamp: Date()
+                timestamp: result.timestamp
             )
         } catch {
-            lastError = error
-            throw error
+            let processingTime = Date().timeIntervalSince(startTime)
+            
+            // 记录错误并返回回退结果
+            print("❌ AI 分析失败: \(error.localizedDescription)")
+            
+            var fallbackResult = createFallbackResult(originalText: request.voiceText)
+            fallbackResult = AIAnalysisResult(
+                originalText: fallbackResult.originalText,
+                extractedAmount: fallbackResult.extractedAmount,
+                suggestedCategory: fallbackResult.suggestedCategory,
+                suggestedTitle: fallbackResult.suggestedTitle,
+                suggestedDescription: fallbackResult.suggestedDescription,
+                confidence: fallbackResult.confidence,
+                suggestedTags: fallbackResult.suggestedTags,
+                alternativeInterpretations: fallbackResult.alternativeInterpretations,
+                processingTime: processingTime,
+                timestamp: fallbackResult.timestamp
+            )
+            
+            return fallbackResult
         }
     }
     
+    // MARK: - 重试机制
+    
+    private func performAnalysisWithRetry(_ request: AIAnalysisRequest) async throws -> AIAnalysisResult {
+        var lastError: Error?
+        
+        for attempt in 1...maxRetryAttempts {
+            do {
+                return try await performSingleAnalysis(request)
+            } catch let error as AIAnalysisError {
+                lastError = error
+                
+                // 某些错误不需要重试
+                switch error {
+                case .missingAPIKey, .invalidURL, .requestEncodingFailed:
+                    throw error
+                case .apiError(let code) where code == 401 || code == 403:
+                    throw error // 认证错误不重试
+                default:
+                    if attempt < maxRetryAttempts {
+                        let delay = calculateRetryDelay(attempt: attempt)
+                        print("⚠️ AI 分析第 \(attempt) 次尝试失败，\(delay) 秒后重试: \(error.localizedDescription)")
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    }
+                }
+            } catch {
+                lastError = error
+                if attempt < maxRetryAttempts {
+                    let delay = calculateRetryDelay(attempt: attempt)
+                    print("⚠️ 网络请求第 \(attempt) 次尝试失败，\(delay) 秒后重试: \(error.localizedDescription)")
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
+            }
+        }
+        
+        throw lastError ?? AIAnalysisError.networkError(NSError(domain: "Unknown", code: -1))
+    }
+    
+    private func calculateRetryDelay(attempt: Int) -> Double {
+        // 指数退避算法
+        return min(pow(2.0, Double(attempt - 1)), 8.0) // 最大延迟 8 秒
+    }
+    
+    // MARK: - 核心分析逻辑
+    
+    private func performSingleAnalysis(_ request: AIAnalysisRequest) async throws -> AIAnalysisResult {
+        // API Key 验证
+        guard !apiKey.isEmpty else {
+            throw AIAnalysisError.missingAPIKey
+        }
+        
+        // URL 验证
+        guard let url = URL(string: baseURL) else {
+            throw AIAnalysisError.invalidURL
+        }
+        
+        // 构建提示词
+        let prompt = buildPrompt(
+            voiceText: request.voiceText,
+            context: request.context,
+            preferences: request.userPreferences
+        )
+        
+        // 构建请求体
+        let requestBody: [String: Any] = [
+            "model": "deepseek-chat",
+            "messages": [
+                [
+                    "role": "user",
+                    "content": prompt
+                ]
+            ],
+            "max_tokens": 1000,
+            "temperature": 0.3,
+            "stream": false
+        ]
+        
+        // 序列化请求
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: requestBody) else {
+            throw AIAnalysisError.requestEncodingFailed
+        }
+        
+        // 创建请求
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        urlRequest.setValue("AudioExpenseTracker/1.0", forHTTPHeaderField: "User-Agent")
+        urlRequest.httpBody = jsonData
+        
+        // 执行请求
+        let (data, response) = try await session.data(for: urlRequest)
+        
+        // 验证响应
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIAnalysisError.invalidResponse
+        }
+        
+        // 检查状态码
+        guard httpResponse.statusCode == 200 else {
+            throw AIAnalysisError.apiError(httpResponse.statusCode)
+        }
+        
+        // 解析响应
+        return try parseResponse(data)
+    }
+    
     // MARK: - 提示词构建
-    private func buildAnalysisPrompt(from request: AIAnalysisRequest) -> String {
+    private func buildPrompt(voiceText: String, context: String?, preferences: UserPreferences?) -> String {
         let basePrompt = """
         你是一个专业的费用记录分析助手。请分析以下语音转文本的内容，提取费用信息并分类。
         
-        语音内容："\(request.voiceText)"
+        语音内容："\(voiceText)"
         
         请按照以下 JSON 格式返回分析结果：
         {
@@ -98,7 +233,7 @@ class AIAnalysisService: ObservableObject {
         """
         
         // 如果有用户偏好，添加到提示词中
-        if let preferences = request.userPreferences {
+        if let preferences = preferences {
             return basePrompt + buildPreferencesContext(preferences)
         }
         
@@ -121,67 +256,16 @@ class AIAnalysisService: ObservableObject {
         return context
     }
     
-    // MARK: - API 请求
-    private func sendChatRequest(prompt: String) async throws -> String {
-        guard !apiKey.isEmpty else {
-            throw AIAnalysisError.missingAPIKey
-        }
-        
-        let requestBody: [String: Any] = [
-            "model": "deepseek-chat",
-            "messages": [
-                [
-                    "role": "user",
-                    "content": prompt
-                ]
-            ],
-            "temperature": 0.1,
-            "max_tokens": 1000
-        ]
-        
-        guard let url = URL(string: baseURL) else {
-            throw AIAnalysisError.invalidURL
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
-        } catch {
-            throw AIAnalysisError.requestEncodingFailed
-        }
-        
-        let (data, response) = try await session.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIAnalysisError.invalidResponse
-        }
-        
-        guard httpResponse.statusCode == 200 else {
-            throw AIAnalysisError.apiError(httpResponse.statusCode)
-        }
-        
-        do {
-            let jsonResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let choices = jsonResponse?["choices"] as? [[String: Any]]
-            let message = choices?.first?["message"] as? [String: Any]
-            let content = message?["content"] as? String
-            
-            return content ?? ""
-        } catch {
-            throw AIAnalysisError.responseParsingFailed
-        }
-    }
-    
     // MARK: - 响应解析
-    private func parseAnalysisResponse(_ response: String, originalText: String) -> AIAnalysisResult {
-        // 尝试解析 JSON 响应
-        guard let data = response.data(using: .utf8),
+    private func parseResponse(_ data: Data) throws -> AIAnalysisResult {
+        let jsonResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let choices = jsonResponse?["choices"] as? [[String: Any]]
+        let message = choices?.first?["message"] as? [String: Any]
+        let content = message?["content"] as? String
+        
+        guard let data = content?.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return createFallbackResult(originalText: originalText)
+            return createFallbackResult(originalText: content ?? "")
         }
         
         let amount = extractDecimal(from: json["amount"])
@@ -212,7 +296,7 @@ class AIAnalysisService: ObservableObject {
         }
         
         return AIAnalysisResult(
-            originalText: originalText,
+            originalText: content ?? "",
             extractedAmount: amount,
             suggestedCategory: category,
             suggestedTitle: title,

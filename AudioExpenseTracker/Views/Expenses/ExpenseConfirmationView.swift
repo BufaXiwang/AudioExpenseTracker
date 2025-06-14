@@ -8,9 +8,8 @@
 import SwiftUI
 
 struct ExpenseConfirmationView: View {
-    @Binding var expense: ExpenseRecord
-    let analysisResult: AIAnalysisResult?
-    let onConfirm: () -> Void
+    let expense: ExpenseRecord
+    let onConfirm: (ExpenseRecord) -> Void
     let onCancel: () -> Void
     
     @State private var editingAmount: String = ""
@@ -23,10 +22,8 @@ struct ExpenseConfirmationView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    // AI 分析信息
-                    if let result = analysisResult {
-                        AnalysisResultCard(result: result)
-                    }
+                    // AI 分析信息卡片
+                    AIAnalysisCard(expense: expense)
                     
                     // 费用信息编辑区域
                     ExpenseEditForm(
@@ -38,9 +35,7 @@ struct ExpenseConfirmationView: View {
                     )
                     
                     // 置信度指示器
-                    if let result = analysisResult {
-                        ConfidenceIndicator(level: result.confidenceLevel)
-                    }
+                    ConfidenceIndicator(level: expense.confidenceLevel)
                     
                     // 原始语音文本
                     if !expense.originalVoiceText.isEmpty {
@@ -62,8 +57,8 @@ struct ExpenseConfirmationView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("保存") {
-                        saveChanges()
-                        onConfirm()
+                        let updatedExpense = createUpdatedExpense()
+                        onConfirm(updatedExpense)
                     }
                     .fontWeight(.semibold)
                 }
@@ -81,19 +76,23 @@ struct ExpenseConfirmationView: View {
         selectedCategory = expense.category
     }
     
-    private func saveChanges() {
+    private func createUpdatedExpense() -> ExpenseRecord {
+        // 更新费用信息
         if let amount = Decimal(string: editingAmount) {
             expense.amount = amount
         }
         expense.title = editingTitle
         expense.descriptionText = editingDescription
         expense.category = selectedCategory
+        expense.updatedAt = Date()
+        
+        return expense
     }
 }
 
-// MARK: - AI 分析结果卡片
-struct AnalysisResultCard: View {
-    let result: AIAnalysisResult
+// MARK: - AI 分析信息卡片
+struct AIAnalysisCard: View {
+    let expense: ExpenseRecord
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -103,32 +102,39 @@ struct AnalysisResultCard: View {
                 Text("AI 分析结果")
                     .font(.headline)
                 Spacer()
+                
+                // 置信度标签
+                Text("置信度: \(expense.confidenceLevel.description)")
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(confidenceColor.opacity(0.2))
+                    .foregroundColor(confidenceColor)
+                    .cornerRadius(8)
             }
             
             VStack(alignment: .leading, spacing: 8) {
-                if let amount = result.formattedAmount {
-                    HStack {
-                        Text("识别金额:")
-                            .foregroundColor(.secondary)
-                        Text(amount)
-                            .fontWeight(.semibold)
-                    }
+                HStack {
+                    Text("识别金额:")
+                        .foregroundColor(.secondary)
+                    Text(expense.formattedAmount)
+                        .fontWeight(.semibold)
                 }
                 
                 HStack {
                     Text("建议分类:")
                         .foregroundColor(.secondary)
-                    Label(result.suggestedCategory.rawValue, systemImage: result.suggestedCategory.icon)
+                    Label(expense.category.displayName, systemImage: expense.category.iconName)
                         .foregroundColor(.primary)
                 }
                 
-                if !result.suggestedTags.isEmpty {
+                if !expense.tags.isEmpty {
                     HStack {
                         Text("标签:")
                             .foregroundColor(.secondary)
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack {
-                                ForEach(result.suggestedTags, id: \.self) { tag in
+                                ForEach(expense.tags, id: \.self) { tag in
                                     Text(tag)
                                         .font(.caption)
                                         .padding(.horizontal, 8)
@@ -146,6 +152,17 @@ struct AnalysisResultCard: View {
         .padding()
         .background(Color.gray.opacity(0.05))
         .cornerRadius(12)
+    }
+    
+    private var confidenceColor: Color {
+        switch expense.confidenceLevel {
+        case .high:
+            return .green
+        case .medium:
+            return .orange
+        case .low:
+            return .red
+        }
     }
 }
 
@@ -197,41 +214,30 @@ struct ExpenseEditForm: View {
                     if isEditing {
                         Picker("分类", selection: $category) {
                             ForEach(ExpenseCategory.allCases, id: \.self) { category in
-                                Label(category.rawValue, systemImage: category.icon)
+                                Label(category.displayName, systemImage: category.iconName)
                                     .tag(category)
                             }
                         }
                         .pickerStyle(MenuPickerStyle())
                     } else {
-                        Label(category.rawValue, systemImage: category.icon)
+                        Label(category.displayName, systemImage: category.iconName)
                             .foregroundColor(.primary)
                         Spacer()
                     }
                 }
                 
                 // 描述输入
-                HStack(alignment: .top) {
+                VStack(alignment: .leading) {
                     Text("描述:")
-                        .frame(width: 60, alignment: .leading)
-                        .padding(.top, 8)
-                    
-                    if isEditing {
-                        TextEditor(text: $description)
-                            .frame(minHeight: 60)
-                            .padding(4)
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(8)
-                    } else {
-                        Text(description.isEmpty ? "无描述" : description)
-                            .foregroundColor(description.isEmpty ? .secondary : .primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, 8)
-                    }
+                    TextField("费用描述（可选）", text: $description, axis: .vertical)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .disabled(!isEditing)
+                        .lineLimit(3...6)
                 }
             }
         }
         .padding()
-        .background(Color.gray.opacity(0.05))
+        .background(Color(.systemGray6))
         .cornerRadius(12)
     }
 }
@@ -242,31 +248,61 @@ struct ConfidenceIndicator: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("AI 识别置信度")
+                .font(.headline)
+            
             HStack {
-                Image(systemName: "gauge")
+                Text("置信度:")
                     .foregroundColor(.secondary)
-                Text("识别置信度")
-                    .font(.headline)
-                Spacer()
+                
+                HStack(spacing: 4) {
+                    ForEach(0..<3) { index in
+                        Circle()
+                            .fill(index < confidenceValue ? confidenceColor : Color.gray.opacity(0.3))
+                            .frame(width: 12, height: 12)
+                    }
+                }
+                
                 Text(level.description)
-                    .font(.subheadline)
+                    .foregroundColor(confidenceColor)
                     .fontWeight(.medium)
-                    .foregroundColor(Color(level.color))
+                
+                Spacer()
             }
             
-            ProgressView(value: confidenceValue)
-                .progressViewStyle(LinearProgressViewStyle(tint: Color(level.color)))
+            Text(confidenceDescription)
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
         .padding()
-        .background(Color.gray.opacity(0.05))
+        .background(confidenceColor.opacity(0.1))
         .cornerRadius(12)
     }
     
-    private var confidenceValue: Double {
+    private var confidenceValue: Int {
         switch level {
-        case .high: return 0.9
-        case .medium: return 0.6
-        case .low: return 0.3
+        case .high: return 3
+        case .medium: return 2
+        case .low: return 1
+        }
+    }
+    
+    private var confidenceColor: Color {
+        switch level {
+        case .high: return .green
+        case .medium: return .orange
+        case .low: return .red
+        }
+    }
+    
+    private var confidenceDescription: String {
+        switch level {
+        case .high:
+            return "AI 对此次识别结果很有信心，建议直接保存"
+        case .medium:
+            return "AI 识别结果较为准确，建议检查后保存"
+        case .low:
+            return "AI 识别结果可能不准确，建议仔细检查并修改"
         }
     }
 }
@@ -277,18 +313,15 @@ struct OriginalTextCard: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "quote.bubble")
-                    .foregroundColor(.secondary)
-                Text("原始语音")
-                    .font(.headline)
-                Spacer()
-            }
+            Text("原始语音内容")
+                .font(.headline)
             
             Text(text)
                 .font(.body)
                 .foregroundColor(.secondary)
-                .italic()
+                .padding()
+                .background(Color(.systemGray6))
+                .cornerRadius(8)
         }
         .padding()
         .background(Color.gray.opacity(0.05))
@@ -297,28 +330,18 @@ struct OriginalTextCard: View {
 }
 
 #Preview {
-    let sampleExpense = ExpenseRecord(
+    let sampleExpense = try! ExpenseRecord(
         amount: 25.50,
         category: .food,
         title: "午餐",
-        description: "在公司楼下吃了一顿午餐",
-        originalVoiceText: "今天中午花了二十五块五吃午饭"
-    )
-    
-    let sampleResult = AIAnalysisResult(
-        originalText: "今天中午花了二十五块五吃午饭",
-        extractedAmount: 25.50,
-        suggestedCategory: .food,
-        suggestedTitle: "午餐",
-        suggestedDescription: "餐饮支出",
-        confidence: 0.9,
-        suggestedTags: ["午餐", "工作日"]
+        description: "公司附近的快餐",
+        originalVoiceText: "今天中午花了25块5买了个快餐",
+        confidence: 0.85
     )
     
     return ExpenseConfirmationView(
-        expense: .constant(sampleExpense),
-        analysisResult: sampleResult,
-        onConfirm: {},
-        onCancel: {}
+        expense: sampleExpense,
+        onConfirm: { _ in },
+        onCancel: { }
     )
 } 
