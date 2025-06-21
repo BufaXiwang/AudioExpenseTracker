@@ -10,6 +10,7 @@ import SwiftUI
 struct MainTabView: View {
     @StateObject private var recordingViewModel: ExpenseRecordingViewModel
     @StateObject private var settingsManager = SettingsManager()
+    @State private var selectedTab: Int = 0
     @State private var isCurrentlyLongPressing = false
     
     init() {
@@ -28,370 +29,140 @@ struct MainTabView: View {
     
     var body: some View {
         ZStack {
-            // 主内容
-            ExpenseListView()
-                .environmentObject(recordingViewModel)
-            
-            // 录制状态覆盖层
-            if recordingViewModel.currentStep != .idle && recordingViewModel.currentStep != .completed {
-                RecordingOverlayView(isLongPressing: isCurrentlyLongPressing)
+            // 主要内容区域
+            TabView(selection: $selectedTab) {
+                // 明细Tab
+                ExpenseDetailView()
                     .environmentObject(recordingViewModel)
-                    .environmentObject(settingsManager)
+                    .tag(0)
+                
+                // 分析Tab
+                AnalysisView()
+                    .environmentObject(recordingViewModel)
+                    .tag(1)
             }
             
-            // 底部录制按钮和模式切换
+            // 自定义底部Tab栏
             VStack {
                 Spacer()
                 
-                // 简化提示文字（第一次使用时显示）
-                if settingsManager.showRecordingInstructions && recordingViewModel.currentStep == .idle {
-                    VStack(spacing: 8) {
-                        Text("智能录制")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(.blue)
-                        
-                        Text("点击开始录音，或长按持续录音")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                        
-                        Button {
-                            settingsManager.showRecordingInstructions = false
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.gray)
-                                .font(.caption)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    .padding(.bottom, 8)
+                // 录音状态显示区域
+                if recordingViewModel.currentStep != .idle && recordingViewModel.currentStep != .completed {
+                    RecordingStatusOverlay()
+                        .environmentObject(recordingViewModel)
+                        .padding(.bottom, 10)
                 }
                 
-                // 智能录制按钮 - 居中显示
-                SmartRecordButton(isLongPressing: $isCurrentlyLongPressing)
-                    .environmentObject(recordingViewModel)
-                    .environmentObject(settingsManager)
-                    .padding(.bottom, 30)
-                .padding(.horizontal)
+                CustomTabBar(
+                    selectedTab: $selectedTab,
+                    isLongPressing: $isCurrentlyLongPressing
+                )
+                .environmentObject(recordingViewModel)
+                .environmentObject(settingsManager)
             }
         }
-    }
-}
-
-
-
-// MARK: - 智能录制按钮
-struct SmartRecordButton: View {
-    @EnvironmentObject private var recordingViewModel: ExpenseRecordingViewModel
-    @EnvironmentObject private var settingsManager: SettingsManager
-    @Binding var isLongPressing: Bool
-    @State private var isPressed = false
-    @State private var pressStartTime: Date?
-    @State private var longPressTask: Task<Void, Never>?
-    
-    var body: some View {
-        ZStack {
-            // 外圈阴影
-            Circle()
-                .fill(buttonColor)
-                .frame(width: 70, height: 70)
-                .shadow(color: buttonColor.opacity(0.3), radius: 10, x: 0, y: 5)
-            
-            // 内圈
-            Circle()
-                .fill(buttonColor)
-                .frame(width: 60, height: 60)
-            
-            // 静态图标
-            Image(systemName: buttonIcon)
-                .font(.system(size: 24, weight: .medium))
-                .foregroundColor(.white)
-        }
-        .scaleEffect(buttonScale)
-        .animation(.easeInOut(duration: 0.1), value: isPressed)
-        .animation(.easeInOut(duration: 0.3), value: recordingViewModel.voiceService.isRecording)
-        .disabled(recordingViewModel.currentStep == .processing || recordingViewModel.currentStep.isAnalyzing)
-        .gesture(
-            // 统一的手势处理，避免条件分支导致的冲突
-            createUnifiedGesture()
-        )
-    }
-    
-    private var buttonScale: CGFloat {
-        if isPressed {
-            return 0.95
-        } else if recordingViewModel.voiceService.isRecording {
-            return 1.1
-        } else {
-            return 1.0
-        }
-    }
-    
-    private var buttonColor: Color {
-        switch recordingViewModel.currentStep {
-        case .idle, .completed:
-            return .blue
-        case .recording:
-            return .red
-        case .processing:
-            return .orange
-        case .analyzing(_):
-            return .orange
-        case .error:
-            return .red
-        default:
-            return .gray
-        }
-    }
-    
-    private var buttonIcon: String {
-        switch recordingViewModel.currentStep {
-        case .idle, .completed:
-            return "mic.fill"
-        case .recording:
-            // 长按录制时显示麦克风图标，短按录制时显示停止图标
-            return isLongPressing ? "mic.fill" : "stop.fill"
-        case .processing:
-            return "waveform"
-        case .analyzing(_):
-            return "brain"
-        case .error:
-            return "exclamationmark.triangle.fill"
-        default:
-            return "mic.fill"
-        }
-    }
-    
-    // MARK: - 智能手势处理（同时支持单击和长按）
-    private func createUnifiedGesture() -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { _ in
-                if !isPressed {
-                    isPressed = true
-                    pressStartTime = Date()
-                    
-                    // 触觉反馈
-                    if settingsManager.vibrationFeedback {
-                        HapticFeedback.impact(.light)
-                    }
-                    
-                    // 延迟启动长按录制，给短按留出时间
-                    longPressTask = Task {
-                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5秒后判定为长按
-                        
-                        await MainActor.run {
-                            // 如果仍在按压且没有被取消，开始长按录制
-                            if isPressed && !Task.isCancelled {
-                                handleLongPressStart()
-                            }
-                        }
-                    }
-                }
-            }
-            .onEnded { _ in
-                let pressDuration = Date().timeIntervalSince(pressStartTime ?? Date())
-                isPressed = false
-                
-                // 取消长按任务
-                longPressTask?.cancel()
-                longPressTask = nil
-                
-                // 根据按压时长判断操作类型
-                if pressDuration < 0.5 && !isLongPressing {
-                    // 短按：切换录制状态
-                    handleShortPress()
-                } else if isLongPressing {
-                    // 长按结束：停止录制
-                    handleLongPressEnd()
-                }
-            }
-    }
-
-    // MARK: - 智能手势处理方法
-    private func handleLongPressStart() {
-        guard !isLongPressing && (recordingViewModel.currentStep == .idle || recordingViewModel.currentStep == .completed) else {
-            return
-        }
-        
-        isLongPressing = true
-        
-        // 长按开始触觉反馈
-        if settingsManager.vibrationFeedback {
-            HapticFeedback.longPressStart()
-        }
-        
-        // 在后台任务中启动录制，避免阻塞手势
-        Task { @MainActor in
-            await recordingViewModel.startRecording()
-        }
-    }
-    
-    private func handleLongPressEnd() {
-        guard isLongPressing else {
-            return
-        }
-        
-        isLongPressing = false
-        
-        // 只有在录制中时才停止
-        if recordingViewModel.voiceService.isRecording {
-            // 长按结束触觉反馈
-            if settingsManager.vibrationFeedback {
-                HapticFeedback.longPressEnd()
-            }
-            
-            recordingViewModel.stopRecording()
-        }
-    }
-    
-    private func handleShortPress() {
-        // 短按：切换录制状态
-        Task { @MainActor in
-            switch recordingViewModel.currentStep {
-            case .idle, .completed:
-                await recordingViewModel.startRecording()
-            case .recording:
-                recordingViewModel.stopRecording()
-            case .error:
-                await recordingViewModel.resetFlow()
+        // 监听录音状态变化，自动跳转Tab
+        .onChange(of: recordingViewModel.currentStep) { newStep in
+            switch newStep {
+            case .confirmingExpense, .selectingMultipleExpenses, .completed:
+                // 需要确认或完成时，跳转到明细Tab
+                selectedTab = 0
             default:
                 break
             }
         }
+        // 显示多费用选择界面
+        .sheet(isPresented: $recordingViewModel.showingMultiExpenseSelection) {
+            if let primaryExpense = recordingViewModel.pendingExpense {
+                MultiExpenseSelectionView(
+                    primaryExpense: primaryExpense,
+                    alternativeExpenses: recordingViewModel.multiExpenseOptions,
+                    originalText: primaryExpense.originalVoiceText,
+                    onConfirm: { expenses in
+                        Task {
+                            await recordingViewModel.confirmMultipleExpenses(expenses)
+                        }
+                    },
+                    onCancel: {
+                        Task {
+                            await recordingViewModel.resetFlow()
+                        }
+                    }
+                )
+            }
+        }
     }
 }
 
-// MARK: - 录制状态覆盖层
-struct RecordingOverlayView: View {
+// MARK: - 自定义Tab栏
+struct CustomTabBar: View {
+    @Binding var selectedTab: Int
+    @Binding var isLongPressing: Bool
     @EnvironmentObject private var recordingViewModel: ExpenseRecordingViewModel
     @EnvironmentObject private var settingsManager: SettingsManager
-    let isLongPressing: Bool
     
     var body: some View {
-        VStack {
+        HStack {
+            // 明细Tab
+            TabBarButton(
+                icon: "list.bullet",
+                title: "明细",
+                isSelected: selectedTab == 0
+            ) {
+                selectedTab = 0
+            }
+            
             Spacer()
             
-            // 状态卡片
-            VStack(spacing: 16) {
-                // 状态指示器
-                HStack(spacing: 12) {
-                    // 状态图标
-                    ZStack {
-                        Circle()
-                            .fill(statusColor.opacity(0.2))
-                            .frame(width: 50, height: 50)
-                        
-                        Image(systemName: statusIcon)
-                            .font(.system(size: 24, weight: .medium))
-                            .foregroundColor(statusColor)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(recordingViewModel.progressDescription)
-                            .font(.headline)
-                            .foregroundColor(statusColor)
-                        
-                        // 显示录音模式提示或处理状态
-                        if recordingViewModel.currentStep == .recording {
-                            Text(recordingModeHint)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else if recordingViewModel.currentStep == .processing {
-                            Text("正在处理录音文件...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else if recordingViewModel.currentStep.isAnalyzing {
-                            Text("AI正在智能分析费用信息")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    // 进度指示器
-                    if recordingViewModel.isProcessing {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                    }
-                }
-                
-                // 音频波形指示器（录制时显示）
-                if recordingViewModel.voiceService.isRecording {
-                    AudioLevelIndicator(level: recordingViewModel.voiceService.audioLevel)
-                        .frame(height: 40)
-                }
-                
-                // AI分析进度指示器
-                if recordingViewModel.currentStep.isAnalyzing {
-                    AIAnalysisProgressView()
-                        .frame(height: 60)
-                }
-                
-                // 移除识别结果显示，直接进行分析
+            // 大型圆形录音按钮
+            VoiceRecordButton()
+                .environmentObject(recordingViewModel)
+                .environmentObject(settingsManager)
+                .scaleEffect(0.8) // 适当缩小以适配底部栏
+            
+            Spacer()
+            
+            // 分析Tab
+            TabBarButton(
+                icon: "chart.bar.fill",
+                title: "分析",
+                isSelected: selectedTab == 1
+            ) {
+                selectedTab = 1
             }
-            .padding()
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal)
-            .padding(.bottom, 120) // 为底部按钮留出空间
         }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 15)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .padding(.horizontal)
+        .padding(.bottom, 30)
     }
-    
-    private var recordingModeHint: String {
-        // 根据当前是否是长按状态提供智能提示
-        if recordingViewModel.voiceService.isRecording {
-            // 正在录制时的提示
-            if isLongPressing {
-                return "松开按钮停止录音"
-            } else {
-                return "再次点击停止录音"
-            }
-        } else {
-            return "点击开始录音，或长按持续录音"
-        }
-    }
-    
+}
 
+// MARK: - Tab栏按钮
+struct TabBarButton: View {
+    let icon: String
+    let title: String
+    let isSelected: Bool
+    var iconColor: Color? = nil
+    var isRecording: Bool = false
+    let action: () -> Void
     
-    private var statusColor: Color {
-        switch recordingViewModel.currentStep {
-        case .idle:
-            return .blue
-        case .recording:
-            return .red
-        case .processing:
-            return .orange
-        case .analyzing(_):
-            return .orange
-        case .completed:
-            return .green
-        case .error:
-            return .red
-        default:
-            return .blue
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(iconColor ?? (isSelected ? .blue : .gray))
+                    .scaleEffect(isRecording ? 1.2 : 1.0)
+                    .animation(.easeInOut(duration: 0.3), value: isRecording)
+                
+                Text(title)
+                    .font(.caption)
+                    .foregroundColor(iconColor ?? (isSelected ? .blue : .gray))
+            }
         }
-    }
-    
-    private var statusIcon: String {
-        switch recordingViewModel.currentStep {
-        case .idle:
-            return "mic"
-        case .recording:
-            return "mic.fill"
-        case .processing:
-            return "waveform"
-        case .analyzing(_):
-            return "brain"
-        case .completed:
-            return "checkmark.circle.fill"
-        case .error:
-            return "exclamationmark.triangle.fill"
-        default:
-            return "mic"
-        }
+        .frame(width: 60)
     }
 }
 
@@ -450,6 +221,324 @@ struct AIAnalysisProgressView: View {
             animationOffset = 200
             pulseScale = 1.2
         }
+    }
+}
+
+// MARK: - 语音录音按钮
+struct VoiceRecordButton: View {
+    @EnvironmentObject private var recordingViewModel: ExpenseRecordingViewModel
+    @EnvironmentObject private var settingsManager: SettingsManager
+    @State private var scale: CGFloat = 1.0
+    @State private var pulseScale: CGFloat = 1.0
+    
+    var body: some View {
+        Button(action: handleTap) {
+            ZStack {
+                // 外圈 - 状态指示
+                Circle()
+                    .strokeBorder(buttonColor, lineWidth: 3)
+                    .frame(width: 80, height: 80)
+                    .background(Circle().fill(buttonColor.opacity(0.1)))
+                    .scaleEffect(pulseScale)
+                    .animation(pulseAnimation, value: pulseScale)
+                
+                // 内圈 - 主按钮
+                Circle()
+                    .fill(buttonColor)
+                    .frame(width: 60, height: 60)
+                    .scaleEffect(scale)
+                
+                // 图标或内容
+                Group {
+                    if recordingViewModel.currentStep == .recording {
+                        // 录音时显示小型音频指示器
+                        AudioLevelMiniIndicator()
+                            .environmentObject(recordingViewModel)
+                    } else {
+                        Image(systemName: buttonIcon)
+                            .font(.system(size: iconSize, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+                }
+                .scaleEffect(scale)
+            }
+        }
+        .onAppear {
+            updateAnimations()
+        }
+        .onChange(of: recordingViewModel.currentStep) { _, _ in
+            updateAnimations()
+        }
+        .onLongPressGesture(
+            minimumDuration: 0.1,
+            maximumDistance: 50,
+            perform: {},
+            onPressingChanged: { pressing in
+                if pressing && recordingViewModel.currentStep == .idle {
+                    // 开始长按录音
+                    handleLongPressStart()
+                } else if !pressing && recordingViewModel.currentStep == .recording {
+                    // 结束长按录音
+                    handleLongPressEnd()
+                }
+            }
+        )
+    }
+    
+    private var buttonColor: Color {
+        switch recordingViewModel.currentStep {
+        case .idle, .completed:
+            return .blue
+        case .recording:
+            return .red
+        case .processing, .analyzing(_):
+            return .orange
+        case .error:
+            return .red
+        default:
+            return .blue
+        }
+    }
+    
+    private var buttonIcon: String {
+        switch recordingViewModel.currentStep {
+        case .idle, .completed:
+            return "mic.fill"
+        case .recording:
+            return "stop.fill"
+        case .processing:
+            return "waveform"
+        case .analyzing(_):
+            return "brain"
+        case .error:
+            return "exclamationmark.triangle.fill"
+        default:
+            return "mic.fill"
+        }
+    }
+    
+    private var iconSize: CGFloat {
+        switch recordingViewModel.currentStep {
+        case .recording:
+            return 16
+        case .processing, .analyzing(_):
+            return 18
+        default:
+            return 20
+        }
+    }
+    
+    private var pulseAnimation: Animation? {
+        switch recordingViewModel.currentStep {
+        case .recording:
+            return .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
+        case .processing, .analyzing(_):
+            return .easeInOut(duration: 1.5).repeatForever(autoreverses: true)
+        default:
+            return .easeInOut(duration: 0.3)
+        }
+    }
+    
+    private func updateAnimations() {
+        withAnimation(.easeInOut(duration: 0.3)) {
+            switch recordingViewModel.currentStep {
+            case .recording:
+                scale = 1.1
+                pulseScale = 1.2
+            case .processing, .analyzing(_):
+                scale = 1.0
+                pulseScale = 1.1
+            case .error:
+                scale = 0.95
+                pulseScale = 1.0
+            default:
+                scale = 1.0
+                pulseScale = 1.0
+            }
+        }
+        
+        // 错误状态自动重置
+        if case .error = recordingViewModel.currentStep {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                Task {
+                    await recordingViewModel.resetFlow()
+                }
+            }
+        }
+    }
+    
+    private func handleTap() {
+        let haptic = UIImpactFeedbackGenerator(style: .medium)
+        haptic.impactOccurred()
+        
+        switch recordingViewModel.currentStep {
+        case .idle, .completed:
+            // 点击录音模式
+            if settingsManager.recordingMode == .tap {
+                Task {
+                    await recordingViewModel.startRecording()
+                }
+            }
+        case .recording:
+            // 停止录音
+            recordingViewModel.stopRecording()
+        default:
+            break
+        }
+    }
+    
+    private func handleLongPressStart() {
+        // 长按录音模式
+        if settingsManager.recordingMode == .holdToRecord {
+            let haptic = UIImpactFeedbackGenerator(style: .heavy)
+            haptic.impactOccurred()
+            Task {
+                await recordingViewModel.startRecording()
+            }
+        }
+    }
+    
+    private func handleLongPressEnd() {
+        // 长按结束
+        if settingsManager.recordingMode == .holdToRecord {
+            recordingViewModel.stopRecording()
+        }
+    }
+}
+
+// MARK: - 录音状态悬浮层
+struct RecordingStatusOverlay: View {
+    @EnvironmentObject private var recordingViewModel: ExpenseRecordingViewModel
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                // 状态图标
+                Image(systemName: statusIcon)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(statusColor)
+                
+                // 状态文本
+                Text(statusText)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(statusColor)
+                
+                Spacer()
+                
+                // 取消按钮（仅在可取消的状态下显示）
+                if canCancel {
+                    Button("取消") {
+                        Task {
+                            await recordingViewModel.resetFlow()
+                        }
+                    }
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.red)
+                }
+            }
+            
+            // 进度指示器
+            if recordingViewModel.currentStep == .processing || recordingViewModel.currentStep.isAnalyzing {
+                ProgressView()
+                    .scaleEffect(0.8)
+                    .progressViewStyle(CircularProgressViewStyle(tint: statusColor))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 20)
+    }
+    
+    private var statusIcon: String {
+        switch recordingViewModel.currentStep {
+        case .recording:
+            return "waveform"
+        case .processing:
+            return "gear"
+        case .analyzing(_):
+            return "brain"
+        case .error:
+            return "exclamationmark.triangle.fill"
+        default:
+            return "checkmark.circle.fill"
+        }
+    }
+    
+    private var statusColor: Color {
+        switch recordingViewModel.currentStep {
+        case .recording:
+            return .red
+        case .processing, .analyzing(_):
+            return .orange
+        case .error:
+            return .red
+        default:
+            return .green
+        }
+    }
+    
+    private var statusText: String {
+        switch recordingViewModel.currentStep {
+        case .recording:
+            return "正在录音..."
+        case .processing:
+            return "处理语音中..."
+        case .analyzing(_):
+            return "AI智能分析中..."
+        case .error:
+            return "操作失败，请重试"
+        default:
+            return ""
+        }
+    }
+    
+    private var canCancel: Bool {
+        switch recordingViewModel.currentStep {
+        case .processing, .analyzing(_):
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+// MARK: - 迷你音频电平指示器
+struct AudioLevelMiniIndicator: View {
+    @EnvironmentObject private var recordingViewModel: ExpenseRecordingViewModel
+    @State private var animationPhase: Double = 0
+    
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<5, id: \.self) { index in
+                Capsule()
+                    .fill(Color.white)
+                    .frame(width: 2, height: barHeight(for: index))
+                    .animation(
+                        .easeInOut(duration: 0.3)
+                        .repeatForever(autoreverses: true)
+                        .delay(Double(index) * 0.1),
+                        value: animationPhase
+                    )
+            }
+        }
+        .onAppear {
+            animationPhase = 1.0
+        }
+        .onDisappear {
+            animationPhase = 0.0
+        }
+    }
+    
+    private func barHeight(for index: Int) -> CGFloat {
+        let baseHeight: CGFloat = 4
+        let maxHeight: CGFloat = 20
+        
+        // 基于音频电平和动画相位计算高度
+        let audioLevel = recordingViewModel.voiceService.audioLevel
+        let animatedLevel = Double(audioLevel) * (0.5 + 0.5 * sin(animationPhase * .pi + Double(index) * 0.5))
+        
+        return baseHeight + (maxHeight - baseHeight) * CGFloat(animatedLevel)
     }
 }
 

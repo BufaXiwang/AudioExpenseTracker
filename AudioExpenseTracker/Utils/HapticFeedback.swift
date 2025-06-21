@@ -9,51 +9,74 @@ import UIKit
 
 struct HapticFeedback {
     
-    // MARK: - 冲击反馈
+    /// 轻量冲击反馈
     static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
         let generator = UIImpactFeedbackGenerator(style: style)
+        generator.prepare()
         generator.impactOccurred()
     }
     
-    // MARK: - 通知反馈
+    /// 通知反馈
     static func notification(_ type: UINotificationFeedbackGenerator.FeedbackType) {
         let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
         generator.notificationOccurred(type)
     }
     
-    // MARK: - 选择反馈
+    /// 选择反馈
     static func selection() {
         let generator = UISelectionFeedbackGenerator()
+        generator.prepare()
         generator.selectionChanged()
     }
     
-    // MARK: - 录音相关反馈
-    static func recordingStart() {
+    /// 长按开始反馈
+    static func longPressStart() {
         impact(.medium)
     }
     
-    static func recordingStop() {
+    /// 长按结束反馈
+    static func longPressEnd() {
         impact(.light)
     }
     
-    static func recordingError() {
-        notification(.error)
-    }
-    
-    static func recordingSuccess() {
-        notification(.success)
-    }
-    
-    static func modeSwitch() {
-        selection()
-    }
-    
-    // MARK: - 长按反馈序列
-    static func longPressStart() {
+    /// 录制开始反馈
+    static func recordingStart() {
         impact(.heavy)
     }
     
-    static func longPressEnd() {
-        impact(.light)
+    /// 录制结束反馈
+    static func recordingEnd() {
+        impact(.medium)
+    }
+    
+    /// 成功反馈
+    static func success() {
+        notification(.success)
+    }
+    
+    /// 错误反馈
+    static func error() {
+        notification(.error)
+    }
+    
+    /// 警告反馈
+    static func warning() {
+        notification(.warning)
+    }
+    
+    /// 录制停止反馈
+    static func recordingStop() {
+        recordingEnd()
+    }
+    
+    /// 录制成功反馈
+    static func recordingSuccess() {
+        success()
+    }
+    
+    /// 录制错误反馈
+    static func recordingError() {
+        error()
     }
 } 

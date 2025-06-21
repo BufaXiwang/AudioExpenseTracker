@@ -16,6 +16,8 @@ class ExpenseRecordingViewModel: ObservableObject {
     @Published var analysisResult: AIAnalysisResult?
     @Published var pendingExpense: ExpenseRecord?
     @Published var showingConfirmation = false
+    @Published var showingMultiExpenseSelection = false
+    @Published var multiExpenseOptions: [AlternativeInterpretation] = []
     @Published var showingError = false
     @Published var errorMessage = ""
     
@@ -37,6 +39,23 @@ class ExpenseRecordingViewModel: ObservableObject {
     }
     
     // MARK: - 语音录制流程
+    
+    func resetFlow() async {
+        currentStep = .idle
+        voiceRecording = nil
+        analysisResult = nil
+        pendingExpense = nil
+        showingConfirmation = false
+        showingMultiExpenseSelection = false
+        multiExpenseOptions = []
+        showingError = false
+        errorMessage = ""
+        
+        // 清空语音服务状态
+        voiceService.recognizedText = ""
+        
+        print("🔄 [DEBUG] 录制流程已重置")
+    }
     
     func startRecording() async {
         do {
@@ -66,18 +85,26 @@ class ExpenseRecordingViewModel: ObservableObject {
     
     func analyzeRecording() async {
         guard let recording = voiceService.currentRecording else {
+            print("🔍 [DEBUG] 无法获取录音记录")
             await handleError(ExpenseRecordingError.noTranscriptionAvailable)
             return
         }
         
-        // 如果识别结果为空，直接跳转到手动输入
+        print("🔍 [DEBUG] 开始分析录音:")
+        print("🔍 [DEBUG] - 转录文本: '\(recording.transcribedText)'")
+        print("🔍 [DEBUG] - 文本长度: \(recording.transcribedText.count)")
+        print("🔍 [DEBUG] - 录音时长: \(recording.duration)秒")
+        
+        // 如果识别结果为空，直接重置流程（不显示错误）
         if recording.transcribedText.isEmpty {
-            currentStep = .needsManualInput
+            print("🔍 [DEBUG] ❌ 转录文本为空，直接重置流程")
+            await resetFlow()
             return
         }
         
         // 开始AI分析流程
         currentStep = .analyzing(progress: "准备AI分析...")
+        print("🔍 [DEBUG] ✅ 开始AI分析流程")
         
         // 模拟分析步骤，提供用户反馈
         try? await Task.sleep(nanoseconds: 300_000_000) // 0.3秒
@@ -85,6 +112,7 @@ class ExpenseRecordingViewModel: ObservableObject {
         
         do {
             let request = AIAnalysisRequest(voiceText: recording.transcribedText)
+            print("🔍 [DEBUG] 创建AI分析请求: \(request.voiceText)")
             
             currentStep = .analyzing(progress: "分析语音内容...")
             try? await Task.sleep(nanoseconds: 200_000_000) // 0.2秒
@@ -92,26 +120,80 @@ class ExpenseRecordingViewModel: ObservableObject {
             currentStep = .analyzing(progress: "识别费用信息...")
             let result = try await aiService.analyzeExpense(request)
             
+            print("🔍 [DEBUG] AI分析结果:")
+            print("🔍 [DEBUG] - 提取金额: \(result.extractedAmount?.description ?? "nil")")
+            print("🔍 [DEBUG] - 建议分类: \(result.suggestedCategory)")
+            print("🔍 [DEBUG] - 建议标题: '\(result.suggestedTitle)'")
+            print("🔍 [DEBUG] - 置信度: \(result.confidence)")
+            print("🔍 [DEBUG] - 是否有效: \(result.isValid)")
+            
             currentStep = .analyzing(progress: "处理分析结果...")
             try? await Task.sleep(nanoseconds: 300_000_000) // 0.3秒
             
             analysisResult = result
             
             if result.isValid {
+                print("🔍 [DEBUG] ✅ AI分析结果有效，创建费用记录")
                 currentStep = .analyzing(progress: "生成费用记录...")
                 try? await Task.sleep(nanoseconds: 200_000_000) // 0.2秒
                 await createPendingExpense(from: result)
             } else {
-                currentStep = .needsManualInput
+                print("🔍 [DEBUG] ❌ AI分析结果无效，显示错误")
+                print("🔍 [DEBUG] 无效原因检查:")
+                print("🔍 [DEBUG] - 金额存在: \(result.extractedAmount != nil)")
+                print("🔍 [DEBUG] - 金额大于0: \(result.extractedAmount ?? 0 > 0)")
+                print("🔍 [DEBUG] - 标题非空: \(!result.suggestedTitle.isEmpty)")
+                print("🔍 [DEBUG] - 置信度>0.3: \(result.confidence > 0.3)")
+                await handleError(ExpenseRecordingError.aiAnalysisFailed("AI未能从语音中识别出有效的费用信息，请重新录制并说得更清楚一些"))
             }
         } catch {
-            await handleError(error)
+            print("🔍 [DEBUG] ❌ AI分析异常: \(error)")
+            
+            // 根据错误类型提供友好的错误信息
+            let errorMessage: String
+            if let aiError = error as? AIAnalysisError {
+                switch aiError {
+                case .missingAPIKey:
+                    errorMessage = "AI分析服务未配置，请检查API密钥设置"
+                case .invalidURL:
+                    errorMessage = "AI服务地址配置错误"
+                case .requestEncodingFailed:
+                    errorMessage = "请求数据格式错误"
+                case .networkError:
+                    errorMessage = "网络连接失败，请检查网络连接"
+                case .apiError(let code):
+                    switch code {
+                    case 401:
+                        errorMessage = "API密钥无效，请检查配置"
+                    case 429:
+                        errorMessage = "请求过于频繁，请稍后重试"
+                    case 500...599:
+                        errorMessage = "AI服务暂时不可用，请稍后重试"
+                    default:
+                        errorMessage = "AI分析服务错误 (代码: \(code))"
+                    }
+                case .responseParsingFailed:
+                    errorMessage = "AI分析结果解析失败"
+                case .invalidResponse:
+                    errorMessage = "AI服务返回无效响应"
+                }
+            } else {
+                errorMessage = "AI分析过程中发生未知错误：\(error.localizedDescription)"
+            }
+            
+            await handleError(ExpenseRecordingError.aiAnalysisFailed(errorMessage))
         }
     }
     
     // MARK: - 费用记录创建
     
     private func createPendingExpense(from result: AIAnalysisResult) async {
+        // 检查是否有多个费用选项
+        if !result.alternativeInterpretations.isEmpty {
+            await handleMultipleExpenses(result)
+            return
+        }
+        
         guard let amount = result.extractedAmount else {
             await handleError(ExpenseRecordingError.invalidAmount)
             return
@@ -135,6 +217,62 @@ class ExpenseRecordingViewModel: ObservableObject {
             await handleError(error)
         } catch {
             await handleError(ExpenseRecordingError.validationFailed(error.localizedDescription))
+        }
+    }
+    
+    // MARK: - 多费用处理
+    
+    private func handleMultipleExpenses(_ result: AIAnalysisResult) async {
+        guard let amount = result.extractedAmount else {
+            await handleError(ExpenseRecordingError.invalidAmount)
+            return
+        }
+        
+        do {
+            // 创建主要费用记录
+            pendingExpense = try ExpenseRecord(
+                amount: amount,
+                category: result.suggestedCategory,
+                title: result.suggestedTitle,
+                description: result.suggestedDescription,
+                originalVoiceText: result.originalText,
+                confidence: result.confidence,
+                tags: result.suggestedTags
+            )
+            
+            // 设置备选费用选项
+            multiExpenseOptions = result.alternativeInterpretations
+            
+            currentStep = .selectingMultipleExpenses
+            showingMultiExpenseSelection = true
+        } catch let error as ExpenseValidationError {
+            await handleError(error)
+        } catch {
+            await handleError(ExpenseRecordingError.validationFailed(error.localizedDescription))
+        }
+    }
+    
+    func confirmMultipleExpenses(_ expenses: [ExpenseRecord]) async {
+        do {
+            // 批量保存多个费用记录
+            for expense in expenses {
+                try expense.validate()
+                expense.isVerified = true
+                try dataService.saveExpense(expense)
+            }
+            
+            // 成功触觉反馈
+            HapticFeedback.recordingSuccess()
+            
+            // 重置状态
+            await resetFlow()
+            currentStep = .completed
+        } catch let error as ExpenseValidationError {
+            await handleError(error)
+        } catch let error as DataStorageError {
+            await handleError(ExpenseRecordingError.saveFailed(error.localizedDescription))
+        } catch {
+            await handleError(ExpenseRecordingError.saveFailed(error.localizedDescription))
         }
     }
     
@@ -183,19 +321,6 @@ class ExpenseRecordingViewModel: ObservableObject {
     
     // MARK: - 状态管理
     
-    func resetFlow() async {
-        currentStep = .idle
-        voiceRecording = nil
-        analysisResult = nil
-        pendingExpense = nil
-        showingConfirmation = false
-        showingError = false
-        errorMessage = ""
-        
-        // 清空识别结果
-        voiceService.recognizedText = ""
-    }
-    
     private func handleError(_ error: Error) async {
         currentStep = .error
         errorMessage = error.localizedDescription
@@ -203,6 +328,18 @@ class ExpenseRecordingViewModel: ObservableObject {
         
         // 错误触觉反馈
         HapticFeedback.recordingError()
+        
+        print("❌ [ERROR] \(error.localizedDescription)")
+        
+        // 5秒后自动重置状态，允许用户重新开始
+        Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5秒
+            await MainActor.run {
+                if currentStep == .error {
+                    Task { await resetFlow() }
+                }
+            }
+        }
     }
     
     private func setupVoiceServiceObserver() {
@@ -290,7 +427,7 @@ enum RecordingStep: Equatable {
     case recording
     case processing
     case analyzing(progress: String)
-    case needsManualInput
+    case selectingMultipleExpenses
     case confirmingExpense
     case completed
     case error
@@ -305,8 +442,8 @@ enum RecordingStep: Equatable {
             return "处理录音..."
         case .analyzing(let progress):
             return progress
-        case .needsManualInput:
-            return "需要手动输入"
+        case .selectingMultipleExpenses:
+            return "选择费用项目"
         case .confirmingExpense:
             return "确认费用信息"
         case .completed:
@@ -390,6 +527,7 @@ enum ExpenseRecordingError: LocalizedError {
     case voiceRecognitionFailed(String)
     case validationFailed(String)
     case saveFailed(String)
+    case aiAnalysisFailed(String)
     
     var errorDescription: String? {
         switch self {
@@ -405,6 +543,8 @@ enum ExpenseRecordingError: LocalizedError {
             return "数据验证失败：\(message)"
         case .saveFailed(let message):
             return "数据保存失败：\(message)"
+        case .aiAnalysisFailed(let message):
+            return "AI分析失败：\(message)"
         }
     }
 } 

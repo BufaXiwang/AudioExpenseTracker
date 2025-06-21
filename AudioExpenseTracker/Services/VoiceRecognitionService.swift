@@ -10,6 +10,10 @@ import Speech
 import AVFoundation
 import Combine
 
+#if targetEnvironment(simulator)
+import UIKit
+#endif
+
 @MainActor
 class VoiceRecognitionService: NSObject, ObservableObject {
     @Published var recordingState: RecordingState = .idle
@@ -28,6 +32,20 @@ class VoiceRecognitionService: NSObject, ObservableObject {
     private var isEngineRunning = false
     private var hasTapInstalled = false
     
+    // 模拟器测试数据
+    #if targetEnvironment(simulator)
+    private let simulatorTestTexts = [
+        "我今天花了25元买午餐",
+        "打车费用30块钱",
+        "买了一杯咖啡15元",
+        "超市购物花了120元",
+        "地铁费2元",
+        "看电影票价45元",
+        "买书花了80元",
+        "晚餐聚会200元"
+    ]
+    #endif
+    
     override init() {
         super.init()
         setupSpeechRecognizer()
@@ -45,59 +63,57 @@ class VoiceRecognitionService: NSObject, ObservableObject {
         speechRecognizer?.delegate = self
     }
     
-    // MARK: - 资源清理
+    // MARK: - 资源清理优化
+    
     private func cleanupResourcesGracefully() {
-        // 停止音频引擎
-        if isEngineRunning {
+        // 使用状态跟踪确保安全清理
+        if isEngineRunning && !audioEngine.inputNode.isVoiceProcessingBypassed {
             audioEngine.stop()
             isEngineRunning = false
         }
         
-        // 移除音频tap
         if hasTapInstalled {
             audioEngine.inputNode.removeTap(onBus: 0)
             hasTapInstalled = false
         }
         
-        // 清理请求但不取消任务，让它自然完成
+        // 优雅完成识别请求，不强制取消
+        recognitionRequest?.endAudio()
         recognitionRequest = nil
+        
+        // 让任务自然完成，只重置引用
         recognitionTask = nil
         
-        // 重置音频会话
-        do {
-            try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
-        } catch {
-            print("音频会话重置失败: \(error)")
-        }
+        resetAudioSession()
     }
     
     private func cleanupResources() {
-        // 停止音频引擎
+        cleanupAudioEngine()
+        cleanupSpeechRecognition()
+        resetAudioSession()
+    }
+    
+    private func cleanupAudioEngine() {
         if isEngineRunning {
             audioEngine.stop()
             isEngineRunning = false
         }
         
-        // 移除音频tap
         if hasTapInstalled {
             audioEngine.inputNode.removeTap(onBus: 0)
             hasTapInstalled = false
         }
-        
-        // 清理识别请求（如果还没有被结束）
-        if let request = recognitionRequest {
-            // 只在必要时调用 endAudio()
-            request.endAudio()
-        }
+    }
+    
+    private func cleanupSpeechRecognition() {
+        recognitionRequest?.endAudio()
         recognitionRequest = nil
         
-        // 取消识别任务（只有在强制清理时才取消）
-        if let task = recognitionTask {
-            task.cancel()
-        }
+        recognitionTask?.cancel()
         recognitionTask = nil
-        
-        // 重置音频会话
+    }
+    
+    private func resetAudioSession() {
         do {
             try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
         } catch {
@@ -165,6 +181,8 @@ class VoiceRecognitionService: NSObject, ObservableObject {
     func stopRecording() {
         guard isRecording else { return }
         
+        print("🎤 [VOICE DEBUG] 停止录音，当前识别文本: '\(recognizedText)'")
+        
         recordingState = .processing
         
         // 先优雅地结束语音识别请求
@@ -188,9 +206,15 @@ class VoiceRecognitionService: NSObject, ObservableObject {
                         recordingDate: startTime,
                         isProcessing: false
                     )
+                    
+                    print("🎤 [VOICE DEBUG] 创建录音记录:")
+                    print("🎤 [VOICE DEBUG] - 转录文本: '\(recognizedText)'")
+                    print("🎤 [VOICE DEBUG] - 录音时长: \(duration)秒")
+                    print("🎤 [VOICE DEBUG] - 文本长度: \(recognizedText.count)字符")
                 }
                 
                 recordingState = .completed
+                print("🎤 [VOICE DEBUG] 录音状态设置为完成")
             }
         }
     }
@@ -231,9 +255,12 @@ class VoiceRecognitionService: NSObject, ObservableObject {
                 
                 if let result = result {
                     self.recognizedText = result.bestTranscription.formattedString
+                    print("🎤 [VOICE DEBUG] 识别到文本: '\(self.recognizedText)'")
+                    print("🎤 [VOICE DEBUG] 是否最终结果: \(result.isFinal)")
                 }
                 
                 if let error = error {
+                    print("🎤 [VOICE DEBUG] 识别错误: \(error)")
                     // 忽略特定的系统错误
                     let nsError = error as NSError
                     

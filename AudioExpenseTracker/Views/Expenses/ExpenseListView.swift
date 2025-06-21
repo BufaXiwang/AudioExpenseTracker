@@ -15,9 +15,10 @@ struct ExpenseListView: View {
         order: .reverse
     ) private var expenses: [ExpenseRecord]
     
-    @StateObject private var dataService = DataStorageService()
     @State private var showingDeleteAlert = false
     @State private var expenseToDelete: ExpenseRecord?
+    @State private var selectedExpense: ExpenseRecord?
+    @State private var showEditSheet = false
     
     // 接收录制ViewModel
     @EnvironmentObject private var recordingViewModel: ExpenseRecordingViewModel
@@ -40,6 +41,10 @@ struct ExpenseListView: View {
                                 expense: expense,
                                 onConfirm: {
                                     confirmExpense(expense)
+                                },
+                                onEdit: {
+                                    selectedExpense = expense
+                                    showEditSheet = true
                                 },
                                 onDelete: {
                                     expenseToDelete = expense
@@ -94,6 +99,14 @@ struct ExpenseListView: View {
         } message: {
             Text(recordingViewModel.errorMessage)
         }
+        // 显示编辑界面
+        .sheet(isPresented: $showEditSheet) {
+            if let expense = selectedExpense {
+                ExpenseEditView(expense: expense) { _ in
+                    selectedExpense = nil
+                }
+            }
+        }
     }
     
     private var todayExpenses: [ExpenseRecord] {
@@ -107,212 +120,34 @@ struct ExpenseListView: View {
     }
     
     private func confirmExpense(_ expense: ExpenseRecord) {
+        expense.isVerified = true
+        expense.updatedAt = Date()
+        
         do {
-            expense.isVerified = true
-            try dataService.updateExpense(expense)
+            try modelContext.save()
         } catch {
             print("确认费用失败: \(error)")
         }
     }
     
     private func deleteExpense(_ expense: ExpenseRecord) {
+        modelContext.delete(expense)
+        
         do {
-            try dataService.deleteExpense(expense)
+            try modelContext.save()
         } catch {
             print("删除费用失败: \(error)")
         }
     }
 }
 
-// MARK: - 费用行视图
-struct ExpenseRowView: View {
-    let expense: ExpenseRecord
-    let onConfirm: () -> Void
-    let onDelete: () -> Void
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            // 分类图标
-            CategoryIconView(category: expense.category)
-            
-            // 费用信息
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(expense.title)
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    Spacer()
-                    
-                    Text(expense.formattedAmount)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.primary)
-                }
-                
-                HStack {
-                    Text(expense.category.displayName)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Spacer()
-                    
-                    Text(expense.formattedDate)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                // 置信度指示器（仅对未确认的显示）
-                if !expense.isVerified {
-                    HStack {
-                        Image(systemName: "brain")
-                            .foregroundColor(.orange)
-                            .font(.caption)
-                        
-                        Text("AI识别 · 置信度: \(expense.confidenceLevel.description)")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                    }
-                }
-            }
-            
-            // 待确认按钮
-            if !expense.isVerified {
-                Button(action: onConfirm) {
-                    Text("确认")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.blue)
-                        .cornerRadius(8)
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-        }
-        .padding(.vertical, 8)
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive, action: onDelete) {
-                Label("删除", systemImage: "trash")
-            }
-        }
-    }
-}
+// ExpenseRowView 已在 ExpenseDetailView.swift 中定义
 
-// MARK: - 分类图标视图
-struct CategoryIconView: View {
-    let category: ExpenseCategory
-    
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(category.color.opacity(0.2))
-                .frame(width: 40, height: 40)
-            
-            Image(systemName: category.iconName)
-                .foregroundColor(category.color)
-                .font(.system(size: 18, weight: .medium))
-        }
-    }
-}
 
-// MARK: - 今日统计卡片
-struct TodayStatsCard: View {
-    let expenses: [ExpenseRecord]
-    
-    private var todayTotal: Decimal {
-        expenses.reduce(0) { $0 + $1.amount }
-    }
-    
-    private var pendingCount: Int {
-        expenses.filter { !$0.isVerified }.count
-    }
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("今日消费")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                
-                Spacer()
-                
-                if pendingCount > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "clock")
-                            .foregroundColor(.orange)
-                            .font(.caption)
-                        
-                        Text("\(pendingCount)条待确认")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                    }
-                }
-            }
-            
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("总金额")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Text(formatAmount(todayTotal))
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.primary)
-                }
-                
-                Spacer()
-                
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("记录数")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Text("\(expenses.count)")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.primary)
-                }
-            }
-        }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-    }
-    
-    private func formatAmount(_ amount: Decimal) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "CNY"
-        formatter.currencySymbol = "¥"
-        return formatter.string(from: NSDecimalNumber(decimal: amount)) ?? "¥0.00"
-    }
-}
 
-// MARK: - 空状态视图
-struct EmptyStateView: View {
-    var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "list.bullet.clipboard")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
-            
-            Text("还没有费用记录")
-                .font(.title2)
-                .fontWeight(.medium)
-                .foregroundColor(.primary)
-            
-            Text("点击底部的录音按钮开始记录你的第一笔费用")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
+// TodayStatsCard 已在 ExpenseDetailView.swift 中定义
+
+// EmptyStateView 已在 ExpenseDetailView.swift 中定义
 
 #Preview {
     ExpenseListView()
